@@ -1,2 +1,5 @@
 # parsing_sites
-# parsing through search
+# parsing yandex_market through search
+# parsing ozon_market through search and category
+# parsing wildberries_market through catalog
+
