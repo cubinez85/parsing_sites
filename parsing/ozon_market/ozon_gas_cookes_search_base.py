@@ -1,0 +1,477 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium_stealth import stealth
+import pandas as pd
+import time
+import re
+import random
+
+
+def setup_driver():
+    """Настройка драйвера"""
+    options = Options()
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--start-maximized')
+    options.add_argument(
+        '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+
+    driver = webdriver.Chrome(options=options)
+
+    stealth(driver,
+            languages=["ru-RU", "ru"],
+            vendor="Google Inc.",
+            platform="Win32",
+            webgl_vendor="Intel Inc.",
+            renderer="Intel Iris OpenGL Engine",
+            fix_hairline=True,
+            )
+
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: function() {return undefined;}})")
+
+    return driver
+
+
+def human_like_delay(min_seconds=1, max_seconds=3):
+    time.sleep(random.uniform(min_seconds, max_seconds))
+
+
+def wait_for_page_load(driver, timeout=10):
+    """Ожидание загрузки страницы"""
+    WebDriverWait(driver, timeout).until(
+        lambda driver: driver.execute_script('return document.readyState') == 'complete'
+    )
+
+
+def find_kitchen_gas_stoves(driver):
+    """Поиск именно кухонных газовых плит с улучшенной логикой"""
+    print("🔍 Ищем кухонные газовые плиты...")
+
+    # Ждем загрузки товаров
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "div[class*='tile'], article[class*='tile'], div[class*='card']"))
+        )
+    except:
+        print("⏳ Товары загружаются медленно...")
+
+    # Более специфичные селекторы для Ozon
+    selectors = [
+        "div[class*='tile-root']",
+        "article[class*='tile-root']",
+        "div[class*='widget-search-result'] div[class*='tile']",
+        "div[class*='search-result'] div[class*='tile']",
+        "div[class*='tile']",
+        "article[class*='tile']",
+        "div[class*='card']",
+        "div[class*='item']"
+    ]
+
+    products = []
+
+    for selector in selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            print(f"Найдено элементов с селектором {selector}: {len(elements)}")
+
+            for element in elements:
+                try:
+                    text = element.text.lower()
+                    if len(text) > 30:  # Минимальная длина текста
+                        # Более точные признаки кухонной ГАЗОВОЙ плиты
+                        is_gas_stove = (
+                                any(word in text for word in ['плита', 'газов', 'газовая', 'газовой']) and
+                                not any(word in text for word in [
+                                    'походн', 'туристич', 'кемпинг', 'кейс', 'переносн', 'портатив',
+                                    'электрич', 'комбинирован', 'электроплита', 'индукцион', 'газоэлектрич'
+                                ])
+                        )
+
+                        if is_gas_stove:
+                            products.append(element)
+                            print(f"Найдена газовая плита: {text[:100]}...")
+                except:
+                    continue
+
+            if products:
+                print(f"✅ Найдено газовых плит: {len(products)}")
+                break
+
+        except Exception as e:
+            print(f"Ошибка при поиске по селектору {selector}: {e}")
+            continue
+
+    return products[:20]  # Ограничиваем количество
+
+
+def extract_accurate_price(element, driver):
+    """Точное извлечение цены с улучшенными селекторами для Ozon"""
+    try:
+        # Стратегия 1: Ищем цену в дочерних элементах с приоритетом классов Ozon
+        price_selectors = [
+            "span[class*='price']",
+            "div[class*='price']",
+            "span[class*='cost']",
+            "div[class*='cost']",
+            "[class*='currency']",
+            "span[class*='rub']",
+            "div[class*='rub']",
+            "b[class*='price']",
+            "strong[class*='price']",
+            # Специфичные классы Ozon
+            ".c311-a1", ".a0c1", ".a1v9", ".a1v7", ".ui-q", ".q5",
+            ".tsHeadline500Large", ".tsBodyControl400Large",
+            "[data-widget*='price']",
+            "[data-testid*='price']",
+            "[class*='tile-price']",
+            # Новые селекторы для современных версий Ozon
+            "span[class*='tsHeadline']",
+            "div[class*='tsHeadline']",
+            "span[class*='tsBodyControl400Large']",
+            "div[class*='tsBodyControl400Large']"
+        ]
+
+        for selector in price_selectors:
+            try:
+                price_elements = element.find_elements(By.CSS_SELECTOR, selector)
+                for price_element in price_elements:
+                    price_text = price_element.text.strip()
+                    if price_text:
+                        print(f"Найден текст цены: {price_text}")
+                        # Улучшенная очистка текста
+                        clean_text = re.sub(r'[^\d\s]', '', price_text)
+                        clean_text = re.sub(r'\s+', '', clean_text)
+
+                        if clean_text and len(clean_text) >= 3:
+                            price = int(clean_text)
+                            if 1000 <= price <= 500000:  # Расширенный диапазон
+                                print(f"Цена извлечена: {price}")
+                                return price
+            except:
+                continue
+
+        # Стратегия 2: Поиск по текстовым узлам с помощью JavaScript
+        js_script = """
+        var element = arguments[0];
+        var walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+        var textNodes = [];
+        while (walker.nextNode()) {
+            textNodes.push(walker.currentNode.textContent);
+        }
+
+        var priceRegex = /\\d{1,3}[\\s ]?\\d{3}[\\s ]?\\d{0,3}/g;
+        for (var i = 0; i < textNodes.length; i++) {
+            var matches = textNodes[i].match(priceRegex);
+            if (matches) {
+                for (var j = 0; j < matches.length; j++) {
+                    var cleanPrice = matches[j].replace(/[^\\d]/g, '');
+                    if (cleanPrice.length >= 3) {
+                        var price = parseInt(cleanPrice);
+                        if (price >= 1000 && price <= 500000) {
+                            return price;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+        """
+
+        price = driver.execute_script(js_script, element)
+        if price:
+            print(f"Цена из JavaScript: {price}")
+            return price
+
+        # Стратегия 3: Поиск в основном тексте элемента
+        element_text = element.text
+        # Улучшенное регулярное выражение для русских цен
+        price_patterns = [
+            r'(\d{1,3}[ \ ]?\d{3}[ \ ]?\d{0,3})[ \ ]?₽?',
+            r'₽[ \ ]*(\d{1,3}[ \ ]?\d{3}[ \ ]?\d{0,3})',
+            r'руб[^\\d]*(\d{1,3}[ \ ]?\d{3}[ \ ]?\d{0,3})'
+        ]
+
+        for pattern in price_patterns:
+            price_matches = re.findall(pattern, element_text)
+            for match in price_matches:
+                clean_price = re.sub(r'[^\d]', '', str(match))
+                if clean_price:
+                    price = int(clean_price)
+                    if 1000 <= price <= 500000:
+                        print(f"Цена из текста: {price}")
+                        return price
+
+        # Стратегия 4: Поиск в атрибутах data-*
+        try:
+            data_attributes = element.get_attribute('outerHTML')
+            if data_attributes:
+                data_price_matches = re.findall(r'data-price="(\d+)"', data_attributes)
+                for match in data_price_matches:
+                    price = int(match)
+                    if 1000 <= price <= 500000:
+                        print(f"Цена из data-атрибута: {price}")
+                        return price
+        except:
+            pass
+
+        print("Цена не найдена")
+        return None
+
+    except Exception as e:
+        print(f"Ошибка извлечения цены: {e}")
+        return None
+
+
+def extract_product_name(element):
+    """Извлечение названия товара с улучшенной логикой"""
+    try:
+        # Попробуем найти заголовок или название товара
+        title_selectors = [
+            "a[class*='title']",
+            "span[class*='title']",
+            "div[class*='title']",
+            "h3", "h4", "h5",
+            "a[class*='name']",
+            "span[class*='name']",
+            "div[class*='name']",
+            "[class*='tile-title']",
+            "[class*='card-title']",
+            ".tsBody500Medium", ".a5-a"
+        ]
+
+        for selector in title_selectors:
+            try:
+                title_elements = element.find_elements(By.CSS_SELECTOR, selector)
+                for title_element in title_elements:
+                    title_text = title_element.text.strip()
+                    if title_text and len(title_text) > 10:
+                        print(f"Название из селектора {selector}: {title_text[:80]}...")
+                        return title_text
+            except:
+                continue
+
+        # Если не нашли по селекторам, используем общий текст
+        text = element.text
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+
+        # Ищем строку с названием (самая длинная информативная строка)
+        if lines:
+            # Фильтруем строки с ценами и техническими данными
+            filtered_lines = []
+            for line in lines:
+                if (len(line) > 15 and
+                        not re.search(r'\d{1,3}[ \ ]?\d{3}[ \ ]?\d{0,3}[ \ ]?₽', line) and
+                        not re.search(r'отзыв|в корзину|купить|₽|руб|доставка', line.lower())):
+                    filtered_lines.append(line)
+
+            if filtered_lines:
+                # Возвращаем самую длинную строку
+                name = max(filtered_lines, key=len)
+                print(f"Название из фильтрованных строк: {name[:80]}...")
+                return name
+
+            # Если не нашли отфильтрованных, возвращаем первую длинную строку
+            for line in lines:
+                if len(line) > 20:
+                    print(f"Название из длинной строки: {line[:80]}...")
+                    return line
+
+            name = lines[0] if lines else "Неизвестная модель"
+            print(f"Название из первой строки: {name[:80]}...")
+            return name
+
+        print("Название не найдено")
+        return "Неизвестная модель"
+
+    except Exception as e:
+        print(f"Ошибка извлечения названия: {e}")
+        return "Неизвестная модель"
+
+
+def parse_ozon_kitchen_gas_stoves():
+    """Парсинг именно кухонных газовых плит"""
+    driver = setup_driver()
+    data = []
+
+    try:
+        # ОДИН наиболее релевантный URL для газовых плит
+        url = "https://www.ozon.ru/search/?text=газовая+плита+кухонная&from_global=true"
+
+        print(f"\n🌐 Используем основной URL: {url}")
+        driver.get(url)
+        wait_for_page_load(driver)
+        human_like_delay(5, 8)
+
+        # Прокручиваем для загрузки всех товаров
+        print("📜 Прокручиваем страницу для загрузки товаров...")
+        for i in range(4):
+            scroll_height = random.randint(800, 1200)
+            driver.execute_script(f"window.scrollBy(0, {scroll_height});")
+            human_like_delay(2, 4)
+
+        # Ищем кухонные ГАЗОВЫЕ плиты
+        products = find_kitchen_gas_stoves(driver)
+
+        if not products:
+            print("❌ Не удалось найти газовые плиты на странице")
+            return data
+
+        print(f"\n🎯 Обрабатываем {len(products)} газовых плит...")
+
+        for i, product in enumerate(products, 1):
+            try:
+                print(f"\n--- Плита {i}/{len(products)} ---")
+
+                # Прокручиваем к товару
+                driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", product)
+                human_like_delay(1, 2)
+
+                # Извлекаем информацию
+                name = extract_product_name(product)
+                price = extract_accurate_price(product, driver)
+
+                print(f"📝 Название: {name[:100] if name else 'Не найдено'}")
+                print(f"💰 Цена: {price if price else 'Не найдена'}")
+
+                if name and price:
+                    # СТРОГАЯ проверка что это именно ГАЗОВАЯ кухонная плита
+                    name_lower = name.lower()
+                    is_gas_kitchen_stove = (
+                            any(word in name_lower for word in ['газов', 'газовая', 'газовой']) and
+                            any(word in name_lower for word in ['плита', 'варочная', 'духовка']) and
+                            not any(word in name_lower for word in [
+                                'электрич', 'комбинирован', 'электроплита',
+                                'индукцион', 'газоэлектрич', 'походн', 'туристич'
+                            ])
+                    )
+
+                    if is_gas_kitchen_stove:
+                        data.append({
+                            'Категория товара': 'Кухонная газовая плита',
+                            'Модель': name,
+                            'Цена': price,
+                            'Источник': 'Ozon'
+                        })
+                        print(f"✅ Добавлена ГАЗОВАЯ плита: {name[:80]}... - {price} руб.")
+                    else:
+                        print(f"❌ Пропущена (не газовая): {name[:60]}...")
+                else:
+                    print(f"❌ Неполные данные - название или цена отсутствуют")
+
+            except Exception as e:
+                print(f"⚠️ Ошибка обработки плиты {i}: {e}")
+                continue
+
+        print(f"\n📊 Обработка завершена. Успешно собрано: {len(data)} ГАЗОВЫХ плит")
+
+    except Exception as e:
+        print(f"🚨 Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        driver.save_screenshot('ozon_error.png')
+    finally:
+        driver.quit()
+
+    return data
+
+
+def save_to_excel(data, filename='ozon_kitchen_gas_stoves.xlsx'):
+    """Сохраняет данные в Excel с ценой в формате числа"""
+    if data:
+        df = pd.DataFrame(data)
+
+        # Удаляем дубликаты по модели и цене
+        initial_count = len(df)
+        df = df.drop_duplicates(subset=['Модель', 'Цена'])
+        removed_duplicates = initial_count - len(df)
+        if removed_duplicates > 0:
+            print(f"🗑️ Удалено дубликатов: {removed_duplicates}")
+
+        # Сортируем по цене
+        df = df.sort_values('Цена', ascending=True)
+        df.reset_index(drop=True, inplace=True)
+        df.index = df.index + 1
+
+        # СОХРАНЯЕМ ЦЕНУ КАК ЧИСЛО (без форматирования в строку)
+        # df['Цена'] остается как число
+
+        # Создаем Excel writer для настройки форматов
+        with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+            df.to_excel(writer, index=True, index_label='№', sheet_name='Газовые плиты')
+
+            # Получаем workbook и worksheet для настройки форматов
+            workbook = writer.book
+            worksheet = writer.sheets['Газовые плиты']
+
+            # Настраиваем формат для колонки с ценой как числовой
+            from openpyxl.styles import NamedStyle
+            number_style = NamedStyle(name='number_style')
+            number_style.number_format = '#,##0'
+
+            # Применяем формат к колонке с ценой (колонка D)
+            for row in range(2, len(df) + 2):  # +2 потому что 1 строка - заголовки, и Excel начинает с 1
+                worksheet[f'D{row}'].style = number_style
+
+        print(f"\n💾 Сохранено {len(df)} кухонных плит в файл {filename}")
+        print("💰 Цена сохранена в формате ЧИСЛА для дальнейших вычислений")
+
+        # Выводим результаты
+        print("\n🏆 Собранные кухонные газовые плиты с Ozon:")
+        print("-" * 100)
+        for i, row in df.iterrows():
+            # Форматируем только для вывода в консоль
+            formatted_price = f"{row['Цена']:,} руб.".replace(',', ' ')
+            print(f"{i:2d}. {row['Модель'][:70]}... - {formatted_price}")
+        print("-" * 100)
+
+        # Статистика (теперь можем использовать числовые значения напрямую)
+        prices = df['Цена'].tolist()
+        if prices:
+            avg_price = sum(prices) // len(prices)
+            print(f"\n📈 Статистика:")
+            print(f"   • Всего плит: {len(prices)}")
+            print(f"   • Минимальная цена: {min(prices):,} руб.")
+            print(f"   • Максимальная цена: {max(prices):,} руб.")
+            print(f"   • Средняя цена: {avg_price:,} руб.")
+
+        return df
+    else:
+        print("📭 Нет данных для сохранения")
+        return None
+
+
+if __name__ == "__main__":
+    print("🚀 Запускаем парсинг кухонных ГАЗОВЫХ плит с Ozon...")
+    print("⏳ Ищем именно ГАЗОВЫЕ модели (исключаем электрические и комбинированные)...")
+    print("=" * 80)
+
+    start_time = time.time()
+
+    kitchen_stoves_data = parse_ozon_kitchen_gas_stoves()
+
+    end_time = time.time()
+    execution_time = end_time - start_time
+
+    print(f"\n⏱️ Время выполнения: {execution_time:.2f} секунд")
+    print(f"📊 Найдено ГАЗОВЫХ плит: {len(kitchen_stoves_data)}")
+
+    # Сохраняем результаты
+    result_df = save_to_excel(kitchen_stoves_data)
+
+    if not kitchen_stoves_data:
+        print("\n❌ Газовые плиты не найдены")
+        print("\n💡 Рекомендации для решения проблемы:")
+        print("1. Проверьте доступность сайта Ozon")
+        print("2. Попробуйте использовать VPN")
+        print("3. Обновите селекторы в коде под текущую версию сайта")
+        print("4. Увеличьте время ожидания загрузки страницы")
+        print("5. Проверьте работу антидетект-функций")
